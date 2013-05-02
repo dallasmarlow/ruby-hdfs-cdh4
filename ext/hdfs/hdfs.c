@@ -194,7 +194,7 @@ VALUE HDFS_File_System_delete(VALUE self, VALUE path, VALUE recursive) {
   FSData* data = NULL;
   Data_Get_Struct(self, FSData, data);
   int success = hdfsDelete(data->fs, RSTRING_PTR(path),
-      CheckType(recursive, T_TRUE) ? 1 : HDFS_DEFAULT_RECURSIVE_DELETE);
+      (recursive == Qtrue) ? 1 : HDFS_DEFAULT_RECURSIVE_DELETE);
   return success == 0 ? Qtrue : Qfalse;
 }
 
@@ -876,7 +876,7 @@ void Init_hdfs() {
   rb_define_method(c_file_system, "initialize", HDFS_File_System_initialize, 2);
   rb_define_method(c_file_system, "disconnect", HDFS_File_System_disconnect, 0);
   rb_define_method(c_file_system, "open", HDFS_File_System_open, 3);
-  rb_define_method(c_file_system, "delete", HDFS_File_System_delete, 1);
+  rb_define_method(c_file_system, "delete", HDFS_File_System_delete, 2);
   rb_define_method(c_file_system, "rename", HDFS_File_System_rename, 2);
   rb_define_method(c_file_system, "exist?", HDFS_File_System_exist, 1);
   rb_define_method(c_file_system, "create_directory", HDFS_File_System_create_directory, 1);
@@ -888,7 +888,7 @@ void Init_hdfs() {
   rb_define_method(c_file_system, "chgrp", HDFS_File_System_chgrp, 2);
   rb_define_method(c_file_system, "chmod", HDFS_File_System_chmod, 2);
   rb_define_method(c_file_system, "chown", HDFS_File_System_chown, 2);
-  rb_define_method(c_file_system, "copy", HDFS_File_System_copy, 2);
+  rb_define_method(c_file_system, "copy", HDFS_File_System_copy, 3);
   rb_define_method(c_file_system, "capacity", HDFS_File_System_capacity, 0);
   rb_define_method(c_file_system, "default_block_size",
       HDFS_File_System_default_block_size, 0);
