@@ -14,6 +14,7 @@ static VALUE c_file_system;
 static VALUE c_file_info_file;
 static VALUE c_file_info_directory;
 static VALUE e_dfs_exception;
+static VALUE e_connect_error;
 static VALUE e_file_error;
 static VALUE e_could_not_open;
 static VALUE e_does_not_exist;
@@ -21,7 +22,7 @@ static VALUE e_does_not_exist;
 static const int32_t HDFS_DEFAULT_BLOCK_SIZE     = 134217728;
 static const int16_t HDFS_DEFAULT_REPLICATION    = 3;
 static const short HDFS_DEFAULT_MODE             = 0644;
-static const char* HDFS_DEFAULT_HOST             = "localhost";
+static const char* HDFS_DEFAULT_HOST             = "0.0.0.0";
 static const int HDFS_DEFAULT_RECURSIVE_DELETE   = 0;
 static const int HDFS_DEFAULT_PATH_STRING_LENGTH = 1024;
 static const int HDFS_DEFAULT_PORT               = 8020;
@@ -154,16 +155,32 @@ VALUE HDFS_File_System_alloc(VALUE klass) {
 
 /**
  * call-seq:
- *    hdfs.new -> hdfs
+ *    hdfs.new(host='localhost', port=8020) -> hdfs
  *
- * Creates a new HDFS client connection.
+ * Creates a new HDFS client connection, returning a new
+ * Hadoop::DFS::FileSystem object if successful.  If this fails, raises a
+ * ConnectError.
  */
-VALUE HDFS_File_System_initialize(VALUE self, VALUE host, VALUE port) {
+VALUE HDFS_File_System_initialize(int argc, VALUE* argv, VALUE self) {
+  VALUE host, port;
+  rb_scan_args(argc, argv, "02", &host, &port);
+  // Sets default values for host and port if not supplied by user.
+  char* hdfs_host = (char*) HDFS_DEFAULT_HOST;
+  int hdfs_port = HDFS_DEFAULT_PORT;
+  if (!NIL_P(host)) {
+    hdfs_host = RSTRING_PTR(host);
+  }
+  if (!NIL_P(port)) {
+    hdfs_port = NUM2INT(port);
+  }
   FSData* data = NULL;
   Data_Get_Struct(self, FSData, data);
-  data->fs = hdfsConnect(
-    RTEST(host) ? RSTRING_PTR(host) : HDFS_DEFAULT_HOST,
-    RTEST(port) ? NUM2INT(port) : HDFS_DEFAULT_PORT);  
+  data->fs = hdfsConnect(hdfs_host, hdfs_port); 
+  if (data->fs == NULL) {
+    rb_raise(e_connect_error, "Failed to connect to HDFS at: %s:%d",
+        hdfs_host, hdfs_port);
+    return Qnil;
+  } 
   return self;
 }
 
@@ -188,14 +205,23 @@ VALUE HDFS_File_System_disconnect(VALUE self) {
  *    hdfs.delete(path, recursive=false) -> success
  *
  * Deletes the file at the supplied path, recursively if specified.  Returns
- * True if successful, False if unsuccessful.
+ * True if successful, raises a DFSException if this fails.
  */
-VALUE HDFS_File_System_delete(VALUE self, VALUE path, VALUE recursive) {
+VALUE HDFS_File_System_delete(int argc, VALUE* argv, VALUE self) {
+  VALUE path, recursive;
+  rb_scan_args(argc, argv, "11", &path, &recursive);
+  int hdfs_recursive = HDFS_DEFAULT_RECURSIVE_DELETE;
+  if (!NIL_P(recursive)) {
+    hdfs_recursive = (recursive == Qtrue) ? 1 : 0;
+  }
   FSData* data = NULL;
   Data_Get_Struct(self, FSData, data);
-  int success = hdfsDelete(data->fs, RSTRING_PTR(path),
-      (recursive == Qtrue) ? 1 : HDFS_DEFAULT_RECURSIVE_DELETE);
-  return success == 0 ? Qtrue : Qfalse;
+  if (hdfsDelete(data->fs, RSTRING_PTR(path), hdfs_recursive) < 0) {
+    rb_raise(e_dfs_exception, "Could not delete file at path: %s",
+        RSTRING_PTR(path));
+    return Qnil;
+  }
+  return Qtrue;
 }
 
 /**
@@ -203,13 +229,17 @@ VALUE HDFS_File_System_delete(VALUE self, VALUE path, VALUE recursive) {
  *    hdfs.rename(from_path, to_path) -> success
  *
  * Renames the file at the supplied path to the file at the destination path.
- * Returns True if successful, False if unsuccessful.
+ * Returns True if successful, raises a DFSException if this fails.
  */
 VALUE HDFS_File_System_rename(VALUE self, VALUE from_path, VALUE to_path) {
   FSData* data = NULL;
   Data_Get_Struct(self, FSData, data);
-  int success = hdfsRename(data->fs, RSTRING_PTR(from_path), RSTRING_PTR(to_path));
-  return success == 0 ? Qtrue : Qfalse;
+  if (hdfsRename(data->fs, RSTRING_PTR(from_path), RSTRING_PTR(to_path)) < 0) {
+    rb_raise(e_dfs_exception, "Could not rename path: %s to path: %s",
+        RSTRING_PTR(from_path), RSTRING_PTR(to_path));
+    return Qnil;
+  }
+  return Qtrue;
 }
 
 /**
@@ -230,14 +260,18 @@ VALUE HDFS_File_System_exist(VALUE self, VALUE path) {
  * call-seq:
  *    hdfs.create_directory(path) -> success
  *
- * Checks if a file exists at the supplied path.  If file exists, returns True;
- * if not, returns False.
+ * Creates a directory at the supplied path.  If successful, returns True;
+ * raises a DFSException if this fails.
  */
 VALUE HDFS_File_System_create_directory(VALUE self, VALUE path) {
   FSData* data = NULL;
   Data_Get_Struct(self, FSData, data);
-  int success = hdfsCreateDirectory(data->fs, RSTRING_PTR(path));
-  return success == 0 ? Qtrue : Qfalse;
+  if (hdfsCreateDirectory(data->fs, RSTRING_PTR(path)) < 0) {
+    rb_raise(e_dfs_exception, "Could not create directory at path: %s",
+        RSTRING_PTR(path));
+    return Qnil;
+  }
+  return Qtrue;
 }
 
 /**
@@ -292,17 +326,30 @@ VALUE HDFS_File_System_stat(VALUE self, VALUE path) {
 
 /**
  * call-seq:
- *    hdfs.set_replication(path, replication) -> success
+ *    hdfs.set_replication(path, replication=3) -> success
  *
  * Sets the replication of the following path to the supplied number of nodes
- * it will be replicated against.  Returns True if successful; False if not.
+ * it will be replicated against.  Returns True if successful; raises a
+ * DFSException if this fails.
  */
-VALUE HDFS_File_System_set_replication(VALUE self, VALUE path, VALUE replication) {
+VALUE HDFS_File_System_set_replication(int argc, VALUE* argv, VALUE self) {
+  VALUE path, replication;
+  rb_scan_args(argc, argv, "11", &path, &replication);
+  int hdfs_replication;
+  // If no replication value is supplied, uses default replication value.
+  if (NIL_P(replication)) {
+    hdfs_replication = HDFS_DEFAULT_REPLICATION;
+  } else {
+    hdfs_replication = NUM2INT(replication);
+  }
   FSData* data = NULL;
   Data_Get_Struct(self, FSData, data);
-  int success = hdfsSetReplication(data->fs, RSTRING_PTR(path),
-      RTEST(replication) ? NUM2INT(replication) : HDFS_DEFAULT_REPLICATION);
-  return success == 0 ? Qtrue : Qfalse;
+  if (hdfsSetReplication(data->fs, RSTRING_PTR(path), hdfs_replication) < 0) {
+    rb_raise(e_dfs_exception, "Failed to set replication to: %d at path: %s",
+        hdfs_replication, RSTRING_PTR(path));
+    return Qnil;
+  }
+  return Qtrue;
 }
 
 /**
@@ -310,77 +357,101 @@ VALUE HDFS_File_System_set_replication(VALUE self, VALUE path, VALUE replication
  *    hdfs.cd(path) -> success
  *
  * Changes the current working directory to the supplied path.  Returns True if
- * successful; False if not.
+ * successful; raises a DFSException if this fails.
  */
 VALUE HDFS_File_System_cd(VALUE self, VALUE path) {
   FSData* data = NULL;
   Data_Get_Struct(self, FSData, data);
-  int success = hdfsSetWorkingDirectory(data->fs, RSTRING_PTR(path));
-  return success == 0 ? Qtrue : Qfalse;
+  if (hdfsSetWorkingDirectory(data->fs, RSTRING_PTR(path)) < 0) {
+    rb_raise(e_dfs_exception,
+        "Failed to change current working directory to path: %s",
+        RSTRING_PTR(path));
+    return Qnil;
+  }
+  return Qtrue;
 }
 
 /**
  * call-seq:
  *    hdfs.cwd -> success
  *
- * Changes the current working directory to the supplied path.  Returns True if
- * successful; False if not.
+ * Displays the current working directory; raises a DFSException if this fails.
  */
 VALUE HDFS_File_System_cwd(VALUE self) {
   FSData* data = NULL;
   Data_Get_Struct(self, FSData, data);
   char* cur_dir = (char *) malloc(
       sizeof(char) * HDFS_DEFAULT_PATH_STRING_LENGTH);
-  int success = hdfsGetWorkingDirectory(data->fs, cur_dir,
-      HDFS_DEFAULT_PATH_STRING_LENGTH);
-  VALUE ruby_cur_dir = rb_str_new2(cur_dir);
-  free(cur_dir);
-  return ruby_cur_dir;
+  if (hdfsGetWorkingDirectory(data->fs, cur_dir,
+      HDFS_DEFAULT_PATH_STRING_LENGTH) < 0) {
+    free(cur_dir);
+    rb_raise(e_dfs_exception, "Failed to get current working directory");
+    return Qnil;
+  }
+  return rb_str_new2(cur_dir);
 }
 
 /**
  * call-seq:
  *    hdfs.chgrp(path, group) -> success
  *
- * Changes the group of the supplied path.  Returns True if successful; False
- * if not.
+ * Changes the group of the supplied path.  Returns True if successful; raises
+ * a DFSException if this fails.
  */
 VALUE HDFS_File_System_chgrp(VALUE self, VALUE path, VALUE group) {
   FSData* data = NULL;
   Data_Get_Struct(self, FSData, data);
-  int success = hdfsChown(data->fs, RSTRING_PTR(path), NULL,
-      RSTRING_PTR(group));
-  return success == 0 ? Qtrue : Qfalse;
+  if (hdfsChgrp(data->fs, RSTRING_PTR(path), NULL, RSTRING_PTR(group)) < 0) {
+    rb_raise(e_dfs_exception, "Failed to chgrp path: %s to group: %s",
+        RSTRING_PTR(path), RSTRING_PTR(group));
+    return Qnil;
+  }
+  return Qtrue;
 }
 
 /**
  * call-seq:
- *    hdfs.chgrp(path, mode) -> retval
+ *    hdfs.chgrp(path, mode=644) -> retval
  *
- * Changes the mode of the supplied path.  Returns True if successful; False
- * if not.
+ * Changes the mode of the supplied path.  Returns True if successful; raises
+ * a DFSException if this fails.
  */
-VALUE HDFS_File_System_chmod(VALUE self, VALUE path, VALUE mode) {
+VALUE HDFS_File_System_chmod(int argc, VALUE* argv, VALUE self) {
+  VALUE path, mode;
+  rb_scan_args(argc, argv, "11", &path, &mode);
   FSData* data = NULL;
   Data_Get_Struct(self, FSData, data);
-  int success = hdfsChmod(data->fs, RSTRING_PTR(path),
-      (short) RTEST(mode) ? octal_decimal(NUM2INT(mode)) : HDFS_DEFAULT_MODE);
-  return success == 0 ? Qtrue : Qfalse;
+  short hdfs_mode;
+  // Sets default mode if none is supplied.
+  if (NIL_P(mode)) {
+    hdfs_mode = HDFS_DEFAULT_MODE;
+  } else {
+    hdfs_mode = octal_decimal(NUM2INT(mode));
+  }
+  if (hdfsChmod(data->fs, RSTRING_PTR(path), hdfs_mode) < 0){
+    rb_raise(e_dfs_exception, "Failed to chmod user path: %s to mode: %d",
+        RSTRING_PTR(path), hdfs_mode);
+    return Qnil;
+  }
+  return Qtrue;
 }
 
 /**
  * call-seq:
  *    hdfs.chown(path, owner) -> retval
  *
- * Changes the owner of the supplied path.  Returns True if successful; False
- * if not.
+ * Changes the owner of the supplied path.  Returns True if successful; raises
+ * a DFSException if this fails.
  */
 VALUE HDFS_File_System_chown(VALUE self, VALUE path, VALUE owner) {
   FSData* data = NULL;
   Data_Get_Struct(self, FSData, data);
-  int success = hdfsChown(data->fs, RSTRING_PTR(path), RSTRING_PTR(owner),
-      NULL);
-  return success == 0 ? Qtrue : Qfalse;
+  if (hdfsChown(data->fs, RSTRING_PTR(path), RSTRING_PTR(owner), NULL) < 0) {
+    rb_raise(e_dfs_exception, "Failed to chown user path: %s to user: %s",
+        RSTRING_PTR(path), RSTRING_PTR(owner));
+    return Qnil;
+  }
+  return Qtrue;
 }
 
 /**
@@ -389,13 +460,16 @@ VALUE HDFS_File_System_chown(VALUE self, VALUE path, VALUE owner) {
  *
  * Copies the file at HDFS location from_path to HDFS location to_path.  If
  * to_fs is specified, copies to this HDFS over the current HDFS.  If
- * successful, returns true; otherwise, returns false.
+ * successful, returns True; otherwise, raises a DFSException.
  */
-VALUE HDFS_File_System_copy(VALUE self, VALUE from_path, VALUE to_path, VALUE to_fs) {
+VALUE HDFS_File_System_copy(int argc, VALUE* argv, VALUE self) {
+  VALUE from_path, to_path, to_fs;
+  rb_scan_args(argc, argv, "21", &from_path, &to_path, &to_fs);
   FSData* data = NULL;
   Data_Get_Struct(self, FSData, data);
   hdfsFS destFS = data->fs;
-  if (RTEST(to_fs)) {
+  // If no to_fs is supplied, copies to the current file system.
+  if (!NIL_P(to_fs)) {
     if (CLASS_OF(to_fs) == c_file_system) {
       FSData* destFSData = NULL;
       Data_Get_Struct(to_fs, FSData, destFSData);
@@ -405,9 +479,13 @@ VALUE HDFS_File_System_copy(VALUE self, VALUE from_path, VALUE to_path, VALUE to
       return Qnil;
     }
   }
-  int success = hdfsCopy(data->fs, RSTRING_PTR(from_path), destFS,
-      RSTRING_PTR(to_path));
-  return success == 0 ? Qtrue : Qfalse;
+  if (hdfsCopy(data->fs, RSTRING_PTR(from_path), destFS, 
+      RSTRING_PTR(to_path)) < 0) {
+    rb_raise(e_dfs_exception, "Failed to copy path: %s to path: %s",
+        RSTRING_PTR(from_path), RSTRING_PTR(to_path));
+    return Qnil;
+  }
+  return Qtrue;
 }
 
 /**
@@ -418,11 +496,14 @@ VALUE HDFS_File_System_copy(VALUE self, VALUE from_path, VALUE to_path, VALUE to
  * to_fs is specified, moves to this HDFS over the current HDFS.  If
  * successful, returns true; otherwise, returns false.
  */
-VALUE HDFS_File_System_move(VALUE self, VALUE from_path, VALUE to_path, VALUE to_fs) {
+VALUE HDFS_File_System_move(int argc, VALUE* argv, VALUE self) {
+  VALUE from_path, to_path, to_fs;
+  rb_scan_args(argc, argv, "21", &from_path, &to_path, &to_fs);
   FSData* data = NULL;
   Data_Get_Struct(self, FSData, data);
   hdfsFS destFS = data->fs;
-  if (RTEST(to_fs)) {
+  // If no to_fs is supplied, moves to the current file system.
+  if (!NIL_P(to_fs)) {
     if (CLASS_OF(to_fs) == c_file_system) {
       FSData* destFSData = NULL;
       Data_Get_Struct(to_fs, FSData, destFSData);
@@ -432,9 +513,12 @@ VALUE HDFS_File_System_move(VALUE self, VALUE from_path, VALUE to_path, VALUE to
       return Qnil;
     }
   }
-  int success = hdfsMove(data->fs, RSTRING_PTR(from_path), destFS,
-      RSTRING_PTR(to_path));
-  return success == 0 ? Qtrue : Qfalse;
+  if (hdfsMove(data->fs, RSTRING_PTR(from_path), destFS,
+      RSTRING_PTR(to_path)) < 0) {
+    rb_raise(e_dfs_exception, "Error while retrieving capacity");
+    return Qnil;
+  }
+  return Qtrue;
 }
 
 /**
@@ -517,38 +601,63 @@ VALUE HDFS_File_System_used(VALUE self) {
  * Changes the last modified and/or last access time in seconds since the Unix
  * epoch for the supplied file.  Returns true if successful; false if not.
  */
-VALUE HDFS_File_System_utime(VALUE self, VALUE path, VALUE modified_time, VALUE access_time) {
+VALUE HDFS_File_System_utime(int argc, VALUE* argv, VALUE self) {
+  VALUE path, modified_time, access_time;
+  tTime hdfs_modified_time, hdfs_access_time;
+  rb_scan_args(argc, argv, "12", &path, &modified_time, &access_time);
+  // Sets default values for last modified and/or last access time.
+  if (NIL_P(modified_time)) {
+    hdfs_modified_time = -1;
+  } else {
+    hdfs_modified_time = NUM2LONG(modified_time);
+  }
+  if (NIL_P(access_time)) {
+    hdfs_access_time = -1;
+  } else {
+    hdfs_access_time = NUM2LONG(access_time);
+  }
   FSData* data = NULL;
   Data_Get_Struct(self, FSData, data);
-  int success = hdfsUtime(data->fs, RSTRING_PTR(path),
-      (tTime) RTEST(modified_time) ? NUM2INT(modified_time) : -1,
-      (tTime) RTEST(access_time) ? NUM2INT(access_time) : -1);
-  return success == 0 ? Qtrue : Qfalse;
+  if (hdfsUtime(data->fs, RSTRING_PTR(path), hdfs_modified_time,
+      hdfs_access_time) < 0) {
+    rb_raise(e_dfs_exception,
+        "Error while setting modified time: %lu, access time: %lu at path: %s",
+        (long) hdfs_modified_time, (long) hdfs_access_time, RSTRING_PTR(path));
+    return Qnil;
+  }
+  return Qtrue;
 }
 
 /**
  * call-seq:
- *    hdfs.open(path, mode, options = {}) -> file
+ *    hdfs.open(path, mode='r', options={}) -> file
  *
  * Opens a file.  If the file cannot be opened, raises a CouldNotOpenError;
  * otherwise, returns a Hadoop::DFS::File object corresponding to the file.
  */
-VALUE HDFS_File_System_open(VALUE self, VALUE path, VALUE mode, VALUE options) {
-  FSData* data = NULL;
-  Data_Get_Struct(self, FSData, data);
-
-  int flags = 0;
-  if (strcmp("r", StringValuePtr(mode)) == 0) {
-    flags = O_RDONLY;
-  } else if (strcmp("w", StringValuePtr(mode)) == 0) {
-    flags = O_WRONLY;
-  } else {
-    rb_raise(rb_eArgError, "Mode must be 'r' or 'w'");
-    return Qnil;
+VALUE HDFS_File_System_open(int argc, VALUE* argv, VALUE self) {
+  VALUE path, mode, options;
+  int flags = O_RDONLY;
+  rb_scan_args(argc, argv, "12", &path, &mode, &options);
+  // Sets file open mode if one is provided by the user.
+  if (!NIL_P(mode)) {
+    if (strcmp("r", StringValuePtr(mode)) == 0) {
+      flags = O_RDONLY;
+    } else if (strcmp("w", StringValuePtr(mode)) == 0) {
+      flags = O_WRONLY;
+    } else {
+      rb_raise(rb_eArgError, "Mode must be 'r' or 'w'");
+      return Qnil;
+    }
+  }
+  if (NIL_P(options)) {
+    options = rb_hash_new();
   }
   VALUE r_buffer_size = rb_hash_aref(options, rb_eval_string(":buffer_size"));
   VALUE r_replication = rb_hash_aref(options, rb_eval_string(":replication"));
   VALUE r_block_size = rb_hash_aref(options, rb_eval_string(":block_size"));
+  FSData* data = NULL;
+  Data_Get_Struct(self, FSData, data);
   hdfsFile file = hdfsOpenFile(data->fs, RSTRING_PTR(path), flags, 
     RTEST(r_buffer_size) ? NUM2INT(r_buffer_size) : 0, 
     RTEST(r_replication) ? NUM2INT(r_replication) : 0, 
@@ -557,7 +666,6 @@ VALUE HDFS_File_System_open(VALUE self, VALUE path, VALUE mode, VALUE options) {
     rb_raise(e_could_not_open, "Could not open file %s", RSTRING_PTR(path));
     return Qnil;
   }
-
   FileData* file_data = ALLOC_N(FileData, 1);
   file_data->fs = data->fs;
   file_data->file = file;
@@ -873,30 +981,30 @@ void Init_hdfs() {
 
   c_file_system = rb_define_class_under(m_dfs, "FileSystem", rb_cObject);
   rb_define_alloc_func(c_file_system, HDFS_File_System_alloc);
-  rb_define_method(c_file_system, "initialize", HDFS_File_System_initialize, 2);
+  rb_define_method(c_file_system, "initialize", HDFS_File_System_initialize, -1);
   rb_define_method(c_file_system, "disconnect", HDFS_File_System_disconnect, 0);
-  rb_define_method(c_file_system, "open", HDFS_File_System_open, 3);
-  rb_define_method(c_file_system, "delete", HDFS_File_System_delete, 2);
+  rb_define_method(c_file_system, "open", HDFS_File_System_open, -1);
+  rb_define_method(c_file_system, "delete", HDFS_File_System_delete, -1);
   rb_define_method(c_file_system, "rename", HDFS_File_System_rename, 2);
   rb_define_method(c_file_system, "exist?", HDFS_File_System_exist, 1);
   rb_define_method(c_file_system, "create_directory", HDFS_File_System_create_directory, 1);
   rb_define_method(c_file_system, "list_directory", HDFS_File_System_list_directory, 1);
   rb_define_method(c_file_system, "stat", HDFS_File_System_stat, 1);
-  rb_define_method(c_file_system, "set_replication", HDFS_File_System_set_replication, 2);
+  rb_define_method(c_file_system, "set_replication", HDFS_File_System_set_replication, -1);
   rb_define_method(c_file_system, "cd", HDFS_File_System_cd, 1);
   rb_define_method(c_file_system, "cwd", HDFS_File_System_cwd, 0);
   rb_define_method(c_file_system, "chgrp", HDFS_File_System_chgrp, 2);
-  rb_define_method(c_file_system, "chmod", HDFS_File_System_chmod, 2);
+  rb_define_method(c_file_system, "chmod", HDFS_File_System_chmod, -1);
   rb_define_method(c_file_system, "chown", HDFS_File_System_chown, 2);
-  rb_define_method(c_file_system, "copy", HDFS_File_System_copy, 3);
+  rb_define_method(c_file_system, "copy", HDFS_File_System_copy, -1);
   rb_define_method(c_file_system, "capacity", HDFS_File_System_capacity, 0);
   rb_define_method(c_file_system, "default_block_size",
       HDFS_File_System_default_block_size, 0);
   rb_define_method(c_file_system, "default_block_size_at_path",
       HDFS_File_System_default_block_size_at_path, 1);
-  rb_define_method(c_file_system, "move", HDFS_File_System_move, 2);
+  rb_define_method(c_file_system, "move", HDFS_File_System_move, -1);
   rb_define_method(c_file_system, "used", HDFS_File_System_used, 0);
-  rb_define_method(c_file_system, "utime", HDFS_File_System_utime, 3);
+  rb_define_method(c_file_system, "utime", HDFS_File_System_utime, -1);
 
   c_file = rb_define_class_under(m_dfs, "File", rb_cObject);
   rb_define_method(c_file, "read", HDFS_File_read, 1);
@@ -929,7 +1037,8 @@ void Init_hdfs() {
   rb_define_method(c_file_info_directory, "is_directory?", HDFS_File_Info_Directory_is_directory, 0);
 
   e_dfs_exception = rb_define_class_under(m_dfs, "DFSException", rb_eStandardError);
-  e_file_error = rb_define_class_under(m_dfs, "FileError", e_dfs_exception);  
+  e_connect_error = rb_define_class_under(m_dfs, "ConnectError", e_dfs_exception);
+  e_file_error = rb_define_class_under(m_dfs, "FileError", e_dfs_exception);
   e_could_not_open = rb_define_class_under(m_dfs, "CouldNotOpenFileError", e_file_error);
   e_does_not_exist = rb_define_class_under(m_dfs, "DoesNotExistError", e_file_error); 
 }

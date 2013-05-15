@@ -30,4 +30,20 @@ dfs.list_directory('/').select(&:is_directory?).first.name
 IO.copy_stream File.open('/tmp/local_file', 'rb'),
                dfs.open('/tmp/remote_file', 'w', replication: 3)
  => 36986
+
+another_dfs = Hadoop::DFS::FileSystem.new 'namenode2.domain.tld', 8020
+dfs.copy '/tmp/remote_file', '/tmp/remote_file', another_dfs
+ => true
+
+another_dfs.move '/tmp/remote_file', '/tmp/another_remote_file', dfs
+ => true
+
+dfs.delete '/tmp/another_remote_file'
+ => true
+
+dfs.chmod '/tmp/remote_file', 755
+ => true
+
+dfs.set_replication '/tmp/remote_file', 2
+ => true
 ```

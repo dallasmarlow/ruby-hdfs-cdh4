@@ -1,6 +1,6 @@
 Gem::Specification.new do |gem|
   gem.name     = 'ruby-hdfs-cdh4'
-  gem.version  = '0.0.1'
+  gem.version  = '0.0.2'
   gem.date     = Time.now.strftime '%Y-%m-%d'
 
   gem.authors  = ['Alexander Staubo', 'Steve Salevan', 'Dallas Marlow']
