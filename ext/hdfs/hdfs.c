@@ -19,12 +19,13 @@ static VALUE e_file_error;
 static VALUE e_could_not_open;
 static VALUE e_does_not_exist;
 
-static const int16_t HDFS_DEFAULT_REPLICATION    = 3;
-static const short HDFS_DEFAULT_MODE             = 0644;
+static const int32_t HDFS_DEFAULT_BUFFER_SIZE    = 131072;
 static const char* HDFS_DEFAULT_HOST             = "0.0.0.0";
-static const int HDFS_DEFAULT_RECURSIVE_DELETE   = 0;
+static const short HDFS_DEFAULT_MODE             = 0644;
 static const int HDFS_DEFAULT_PATH_STRING_LENGTH = 1024;
 static const int HDFS_DEFAULT_PORT               = 8020;
+static const int HDFS_DEFAULT_RECURSIVE_DELETE   = 0;
+static const int16_t HDFS_DEFAULT_REPLICATION    = 3;
 static const char* HDFS_DEFAULT_USER             = NULL;
 
 /*
@@ -170,7 +171,7 @@ VALUE HDFS_File_System_alloc(VALUE klass) {
  * options can have the following keys:
  *
  * * *local*: whether to use the local filesystem instead of HDFS
- *    (default: false)
+ *   (default: false)
  * * *host*: hostname or IP address of a Hadoop NameNode (default: '0.0.0.0')
  * * *port*: port through which to connect to Hadoop NameNode (default: 8020)
  * * *user*: user to connect to filesystem as (default: current user)
@@ -178,6 +179,10 @@ VALUE HDFS_File_System_alloc(VALUE klass) {
 VALUE HDFS_File_System_initialize(int argc, VALUE* argv, VALUE self) {
   VALUE options;
   rb_scan_args(argc, argv, "01", &options);
+
+  if (TYPE(options) != T_HASH) {
+    rb_raise(e_dfs_exception, "options must be of type Hash");
+  }
 
   FSData* data = NULL;
   Data_Get_Struct(self, FSData, data);
@@ -417,7 +422,7 @@ VALUE HDFS_File_System_cwd(VALUE self) {
     rb_raise(e_dfs_exception, "Failed to get current working directory");
     return Qnil;
   }
-  return rb_str_new2(cur_dir);
+  return rb_tainted_str_new2(cur_dir);
 }
 
 /**
@@ -732,9 +737,9 @@ VALUE HDFS_File_System_open(int argc, VALUE* argv, VALUE self) {
   FSData* data = NULL;
   Data_Get_Struct(self, FSData, data);
   hdfsFile file = hdfsOpenFile(data->fs, RSTRING_PTR(path), flags, 
-    RTEST(r_buffer_size) ? NUM2INT(r_buffer_size) : 0, 
-    RTEST(r_replication) ? NUM2INT(r_replication) : 0, 
-    RTEST(r_block_size) ? NUM2INT(r_block_size) : 0);
+      RTEST(r_buffer_size) ? NUM2INT(r_buffer_size) : 0, 
+      RTEST(r_replication) ? NUM2INT(r_replication) : 0, 
+      RTEST(r_block_size) ? NUM2INT(r_block_size) : 0);
   if (file == NULL) {
     rb_raise(e_could_not_open, "Could not open file %s", RSTRING_PTR(path));
     return Qnil;
@@ -759,16 +764,22 @@ VALUE HDFS_File_System_open(int argc, VALUE* argv, VALUE self) {
  * FileError.
  */ 
 VALUE HDFS_File_read(VALUE self, VALUE length) {
+  // Checks whether we're reading more data than HDFS client can support.
+  if (NUM2UINT(length) > HDFS_DEFAULT_BUFFER_SIZE) {
+    rb_raise(e_file_error, "Can only read a max of %u bytes from HDFS",
+        HDFS_DEFAULT_BUFFER_SIZE);
+    return Qnil;
+  }
   FileData* data = NULL;
   Data_Get_Struct(self, FileData, data);
   ensure_file_open(data);
   char* buffer = ALLOC_N(char, length);
   MEMZERO(buffer, char, length);
-  tSize bytes_read = hdfsRead(data->fs, data->file, buffer, NUM2INT(length));
+  tSize bytes_read = hdfsRead(data->fs, data->file, buffer, NUM2UINT(length));
   if (bytes_read == -1) {
     rb_raise(e_file_error, "Failed to read data");
   }
-  return rb_tainted_str_new2(buffer);
+  return rb_tainted_str_new(buffer, bytes_read);
 }
 
 /**
@@ -776,17 +787,19 @@ VALUE HDFS_File_read(VALUE self, VALUE length) {
  *    file.write(bytes) -> num_bytes_written
  *
  * Writes the string specified by bytes to the current file object, returning
- * the number of bytes read as an Integer.  If this fails, raises a FileError.
+ * the number of bytes written as an Integer.  If this fails, raises a
+ * FileError.
  */
 VALUE HDFS_File_write(VALUE self, VALUE bytes) {
   FileData* data = NULL;
   Data_Get_Struct(self, FileData, data);
   ensure_file_open(data);
-  tSize bytes_written = hdfsWrite(data->fs, data->file, RSTRING_PTR(bytes), RSTRING_LEN(bytes));
+  tSize bytes_written = hdfsWrite(data->fs, data->file, RSTRING_PTR(bytes),
+      RSTRING_LEN(bytes));
   if (bytes_written == -1) {
     rb_raise(e_file_error, "Failed to write data");
   }
-  return INT2NUM(bytes_written);
+  return UINT2NUM(bytes_written);
 }
 
 /**
@@ -800,11 +813,11 @@ VALUE HDFS_File_tell(VALUE self) {
   FileData* data = NULL;
   Data_Get_Struct(self, FileData, data);
   ensure_file_open(data);
-  tSize offset = hdfsTell(data->fs, data->file);
+  tOffset offset = hdfsTell(data->fs, data->file);
   if (offset == -1) {
     rb_raise(e_file_error, "Failed to read position");
   }
-  return INT2NUM(offset);
+  return ULONG2NUM(offset);
 }
 
 /**
@@ -818,9 +831,8 @@ VALUE HDFS_File_seek(VALUE self, VALUE offset) {
   FileData* data = NULL;
   Data_Get_Struct(self, FileData, data);
   ensure_file_open(data);
-  int result = hdfsSeek(data->fs, data->file, NUM2INT(offset));
-  if (result != 0) {
-    rb_raise(e_file_error, "Failed to seek to position %d", NUM2INT(offset));
+  if (hdfsSeek(data->fs, data->file, NUM2ULONG(offset)) < 0) {
+    rb_raise(e_file_error, "Failed to seek to position %u", NUM2ULONG(offset));
   }
   return Qtrue;
 }
@@ -837,8 +849,7 @@ VALUE HDFS_File_flush(VALUE self) {
   FileData* data = NULL;
   Data_Get_Struct(self, FileData, data);
   ensure_file_open(data);
-  int result = hdfsFlush(data->fs, data->file);
-  if (result != 0) {
+  if (hdfsFlush(data->fs, data->file) < 0) {
     rb_raise(e_file_error, "Flush failed");
   }
   return Qtrue;
@@ -855,11 +866,11 @@ VALUE HDFS_File_available(VALUE self) {
   FileData* data = NULL;
   Data_Get_Struct(self, FileData, data);
   ensure_file_open(data);
-  int result = hdfsAvailable(data->fs, data->file);
-  if (result == -1) {
+  int bytes_available = hdfsAvailable(data->fs, data->file);
+  if (bytes_available < 0) {
     rb_raise(e_file_error, "Failed to get available data");
   }
-  return INT2NUM(result);
+  return INT2NUM(bytes_available);
 }
 
 /**
@@ -926,7 +937,7 @@ VALUE HDFS_File_write_open(VALUE self) {
 VALUE HDFS_File_Info_block_size(VALUE self) {
   FileInfo* file_info = NULL;
   Data_Get_Struct(self, FileInfo, file_info);
-  return INT2NUM(file_info->mBlockSize);
+  return LONG2NUM(file_info->mBlockSize);
 }
 
 /**
@@ -938,7 +949,7 @@ VALUE HDFS_File_Info_block_size(VALUE self) {
 VALUE HDFS_File_Info_group(VALUE self) {
   FileInfo* file_info = NULL;
   Data_Get_Struct(self, FileInfo, file_info);
-  return rb_str_new(file_info->mGroup, strlen(file_info->mGroup));
+  return rb_str_new2(file_info->mGroup);
 }
 
 /**
