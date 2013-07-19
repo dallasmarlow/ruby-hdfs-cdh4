@@ -46,4 +46,4 @@ dir_config 'hdfs'
 end
 
 have_library    'c', 'main'
-create_makefile 'hdfs'
+create_makefile '_hdfs'
