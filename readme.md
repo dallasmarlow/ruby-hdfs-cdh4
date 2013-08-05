@@ -20,7 +20,7 @@ this gem provides defaults for installation on machines using cdh4 and the hadoo
 to setup your classpath on cdh4 machines require `hdfs/classpath`, or see [classpath.rb](https://github.com/dallasmarlow/ruby-hdfs-cdh4/blob/master/lib/hdfs/classpath.rb) as an example.
 
 ```ruby
-require 'hdfs/classpath'
+require 'hdfs'
 
 # connecting to HDFS
 
