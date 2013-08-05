@@ -38,7 +38,7 @@ module HDFS
         if item.is_directory?
           found_items << find_all(item, match_proc)
         end
-      end.flat_map
+      end.flatten
     end # def find_all path, match_proc
 
     # Reads the full contents of a DFS file, returning the contents as a
