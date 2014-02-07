@@ -321,18 +321,23 @@ VALUE HDFS_File_System_list_directory(VALUE self, VALUE path) {
   Data_Get_Struct(self, FSData, data);
   VALUE file_infos = rb_ary_new();
   int num_files = 0;
-  hdfsFileInfo* infos = hdfsListDirectory(data->fs, RSTRING_PTR(path),
-      &num_files);
+  hdfsFileInfo* infos = hdfsListDirectory(data->fs, RSTRING_PTR(path), &num_files);
+
   if (infos == NULL) {
-    rb_raise(e_does_not_exist, "Directory does not exist: %s",
-        RSTRING_PTR(path));
-    return Qnil;
+    if (hdfsExists(data->fs, RSTRING_PTR(path)) == 0) {
+      return file_infos;
+    } else {
+      rb_raise(e_does_not_exist, "Directory does not exist: %s", RSTRING_PTR(path));
+      return Qnil;
+    }
   }
+
   int i;
   for (i = 0; i < num_files; i++) {
     hdfsFileInfo* cur_info = infos + i;
     rb_ary_push(file_infos, wrap_hdfsFileInfo(cur_info));
   }
+
   hdfsFreeFileInfo(infos, num_files);
   return file_infos;
 }
