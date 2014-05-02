@@ -23,17 +23,15 @@ to setup your classpath on cdh4 machines require `hdfs/classpath`, or see [class
 require 'hdfs/classpath'
 
 # connecting to HDFS
-
 dfs = Hadoop::DFS::FileSystem.new host: 'namenode.domain.tld', port: 8020
 
 dfs.list_directory('/').select(&:is_directory?).first.name
  => 'hdfs://namenode.domain.tld:8020/hbase'
 
-# using Ruby APIs to interact with HDFS files
-
-IO.copy_stream File.open('/tmp/local_file', 'rb'),
-               dfs.open('/tmp/remote_file', 'w', replication: 3)
- => 36986
+# copying a file from your local file system to hdfs
+local = Hadoop::DFS::FileSystem.new local: true
+local.copy '/tmp/local_file', '/tmp/remote_file', hdfs
+ => true
 
 # copying and moving files from one HDFS to another
 
@@ -61,10 +59,4 @@ dfs.chgrp '/tmp/remote_file', 'hdfs'
 dfs.set_replication '/tmp/remote_file', 2
  => true
 
-# copying files from local filesystem to HDFS natively
-
-local_fs = Hadoop::DFS::FileSystem.new local: true
-
-local_fs.copy '/etc/hosts', '/tmp/hosts', dfs
- => true
 ```
