@@ -42,7 +42,7 @@ end
 
 dir_config 'hdfs'
 ['jvm', 'hdfs'].each do |lib|
-  find_library lib, nil, ENV['JAVA_LIB']
+  raise "Cannot find lib#{lib}" unless find_library lib, nil, ENV['JAVA_LIB']
 end
 
 have_library    'c', 'main'
