@@ -15,6 +15,13 @@ this gem provides defaults for installation on machines using cdh4 and the hadoo
   - HADOOP_ENV
   - JAVA_HOME
   - JAVA_LIB
+  
+for example, on Mac OS X you will need to do:
+```
+JAVA_HOME=`/usr/libexec/java_home -v 1.6` \
+JAVA_LIB=`/usr/libexec/java_home -v 1.6`/../Libraries/libjvm.dylib \
+gem install ruby-hdfs-cdh4
+```
 
 ### usage
 to setup your classpath on cdh4 machines require `hdfs/classpath`, or see [classpath.rb](https://github.com/dallasmarlow/ruby-hdfs-cdh4/blob/master/lib/hdfs/classpath.rb) as an example.
