@@ -16,9 +16,9 @@ EOF
 sudo apt-get update
 ```
 
-Install `libhdfs0`:
+Install `libhdfs0` and `hadoop-hdfs`:
 ```
-sudo apt-get install libhdfs0 -y
+sudo apt-get install hadoop-hdfs libhdfs0 -y
 ```
 
 Make sure that `ld` can find `libhdfs.so`:
