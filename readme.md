@@ -5,6 +5,34 @@
   - java    (1.6 <=)
   - libhdfs (2.x)
 
+#### To install libhdfs (on Linux)
+
+Add CDH4 to your apt sources:
+```
+sudo tee /etc/apt/sources.list.d/cloudera-cdh4-amd64.list <<EOF
+deb [arch=amd64] http://archive.cloudera.com/cdh4/ubuntu/precise/amd64/cdh precise-cdh4.5.0 contrib
+EOF
+
+sudo apt-get update
+```
+
+Install `libhdfs0` and `hadoop-hdfs`:
+```
+sudo apt-get install hadoop-hdfs libhdfs0 -y
+```
+
+Make sure that `ld` can find `libhdfs.so`:
+
+```
+sudo ln -s /usr/lib/libhdfs.so.0.0.0 /usr/lib/libhdfs.so
+
+sudo tee -a /etc/ld.so.conf.d/libhdfs.so.conf <<EOF
+/usr/lib
+EOF
+
+sudo ldconfig
+```
+
 ### installation
 ```
 gem install ruby-hdfs-cdh4
