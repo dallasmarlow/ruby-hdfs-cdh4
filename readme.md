@@ -5,7 +5,7 @@
   - java    (1.6 <=)
   - libhdfs (2.x)
 
-#### To install libhdfs (on Linux)
+#### to install libhdfs (on ubuntu)
 
 Add CDH4 to your apt sources:
 ```
